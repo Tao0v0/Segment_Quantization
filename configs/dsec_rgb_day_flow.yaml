@@ -1,0 +1,91 @@
+DEVICE          : cuda              # device used for training and evaluation (cpu, cuda, cuda0, cuda1, ...)
+SAVE_DIR        : 'output_original'          # output folder name used for saving the model, logs and inference results
+
+MODEL:
+  NAME          : CMNeXt                                            # name of the model you are using
+  BACKBONE      : CMNeXt-B2                                         # model variant
+  BACKBONE_FLAG : False
+  PRETRAINED_BACKBONE    : 'checkpoints/pretrained/segformer/mit_b2.pth'     # backbone model's weight 
+  # PRETRAINED        : '/home/xiaoshan/work/adap_v/DELIVER/output/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch356_73.55.pth'     # backbone model's weight 
+  # PRETRAINED      : 'output/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch258_63.93.pth'
+  PRETRAINED    : 'output/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch220_73.99.pth'
+  FLOW_NET_FLAG : True
+  FLOW_NET      : 'eraft'
+  RESUME_FLOWNET: 'output_all_LNorm_HW_flow/DSEC_Flow_CMNeXt-B2_i/model_thun_00_a_11_CMNeXt_CMNeXt-B2_DSEC_Flow_epoch35_0.6729710741740901.pth'  # 训练不加载权重
+
+
+  # FLOW_NET      : 'raft_small'
+  # RESUME_FLOWNET: 'checkpoints/pretrained/flownet/raft-small.pth'
+  # RESUME_FLOWNET: 'dsec.tar'
+  # FLOW_NET      : 'bflow'
+  # RESUME_FLOWNET: 'E_LU4_BD2.ckpt'
+  # RESUME_FLOWNET: 'flow_network.pth'
+  RESUME        : ''                                                # checkpoint file 
+  # RESUME_FLOWNET: ''
+
+DATASET:
+  NAME          : DSEC_Flow                                          # dataset name to be trained with (camvid, cityscapes, ade20k)
+  TYPE          : dsec
+  # ROOT          : '/mnt/sdc/lxy/datasets/DSEC/DSEC/dsec_anytime/day'                                   # dataset root path
+  ROOT          : "/work/sme-wangzr/wan_tao/projects/segment_anytime_v1/dataset/DSEC_processed"                                   # dataset root path
+  # ROOT          : "/mnt/sdb/datasets/dsec_anytime_${DURATION}_N/day"                                   # dataset root path
+  # ROOT          : "/mnt/sdc/lxy/datasets/DSEC/DSEC/dsec_anytime_100/viz_05a/day"
+  # ROOT          : "/mnt/sdc/lxy/datasets/DSEC/DSEC/dsec_anytime_100/synthesis_N11_45_100"
+  IGNORE_LABEL  : 255
+  MODALS        : ['img']
+  # MODALS        : ['img', 'depth']
+  # MODALS        : ['img', 'event']
+  # MODALS        : ['img', 'lidar']
+  # MODALS        : ['img', 'depth', 'event']
+  # MODALS        : ['img', 'depth', 'lidar']
+  # MODALS        : ['img', 'depthd', 'event', 'lidar']
+
+TRAIN:
+  IMAGE_SIZE    : [440, 640]    # training image size in (h, w)
+  FLOW_SPATIAL_SCALE: 1.0       # 1.0=full-res (no downsample), 0.5=half-res
+  BATCH_SIZE    : 4               # batch size used to train
+  EPOCHS        : 40             # number of epochs to train
+  EVAL_START    : 0             # evaluation interval start
+  EVAL_INTERVAL : 1               # evaluation interval during training
+  AMP           : false           # use AMP in training
+  DDP           : true            # use DDP training
+  GRAD_CLIP: 1.0                 # gradient clipping value
+LOSS:
+  NAME          : OhemCrossEntropy          # loss function name 
+  CLS_WEIGHTS   : false            # use class weights in loss calculation
+
+OPTIMIZER:
+  NAME          : adamw           # optimizer name
+  LR            : 0.0001         # initial learning rate used in optimizer
+  WEIGHT_DECAY  : 0.005            # decay rate used in optimizer
+
+SCHEDULER:
+  NAME          : polylr    # scheduler name
+  POWER         : 0.95             # scheduler power
+  WARMUP        : 10              # warmup epochs used in scheduler
+  WARMUP_RATIO  : 0.1             # warmup ratio
+  
+
+EVAL:
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgb.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgbd.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_deliver_rgbe.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgb.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgbl.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgbde.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgbdl.pth'
+  # MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgbdel.pth'
+  IMAGE_SIZE    : [440, 640]                            # evaluation image size in (h, w)        
+  FLOW_SPATIAL_SCALE: 1.0                               # keep consistent with TRAIN.FLOW_SPATIAL_SCALE
+  BATCH_SIZE    : 1                                       # batch size used to train               
+  MSF: 
+    ENABLE      : false                                   # multi-scale and flip evaluation  
+    FLIP        : true                                    # use flip in evaluation  
+    SCALES      : [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]       # scales used in MSF evaluation                
+
+
+TEST:
+  MODEL_PATH    : 'output/DSEC/cmnext_b2_kitti360_rgbe.pth'    # trained model file path
+  FILE          : 'data/DSEC'                          # filename or foldername 
+  IMAGE_SIZE    : [440, 640]                            # inference image size in (h, w)
+  OVERLAY       : false                                   # save the overlay result (image_alpha+label_alpha)
