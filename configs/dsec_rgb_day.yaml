@@ -14,7 +14,7 @@ MODEL:
   FLOW_NET_FLAG : True
   FLOW_NET      : 'eraft'
   RESUME_FLOWNET: 'output_all_LNorm_HW_flow_finetune_upsampleflow/DSEC_Flow_CMNeXt-B2_i/model_thun_00_a_11_CMNeXt_CMNeXt-B2_DSEC_Flow_epoch3_0.6645078579100167.pth'
-  RESUME        : ''                                                # checkpoint file 
+  RESUME        : 'output_viz_dsec/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch4_36.38.pth'                                                # checkpoint file 
   # RESUME_FLOWNET: ''
 
 DATASET:
@@ -48,7 +48,7 @@ TRAIN:
   AMP           : false           # use AMP in training
   DDP           : true            # use DDP training
   FREEZE_FLOW_NET : true
-  FREEZE_SOFTMETRIC: true
+  FREEZE_SOFTMETRIC: false
 LOSS:
   NAME          : OhemCrossEntropy          # loss function name 
   CLS_WEIGHTS   : false            # use class weights in loss calculation
