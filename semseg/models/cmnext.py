@@ -29,7 +29,6 @@ class CMNeXt(BaseModel):     # 主干网络名称          # 检测类别数    
         if self.flow_net_flag:
             self.n_first_channels = 4
             self.flow_net = ERAFT(n_first_channels=self.n_first_channels)
-            # self.flow_net = RAFTSpline()
 
         if not self.backbone_flag: # 实际取False，执行这段
         # if True:
@@ -138,25 +137,10 @@ class CMNeXt(BaseModel):     # 主干网络名称          # 检测类别数    
                         ev_t1_t2 = torch.zeros(ev_t0_t1.shape).to(x[0].device)
                         flow_t1_t2 = torch.zeros(flow_t0_t1.shape).to(x[0].device)
 
-                self.memory_bank = [feature_init[-1]]
-
-                
-                # t0 → t1
+                # t0 → t1（不使用 memory，也不做 t1→t2 的第二次 softsplat）
                 feature_t1 = self.softsplat_net(tenEncone=feature_init, tenForward=flow_t0_t1, event_voxel=ev_t0_t1, rgb=x[0])  # 输出 warp+fine 后的特征
-
-                # feature_t1[-1] = self.fusion_attens(Fw=feature_t1[-1], F0_c=self.memory_bank[0])  # 输入warp后的特征，和memory里的第一个特征（刚开始是金字塔的最顶层，分辨率最小的那个）
-                #                                   把Fw当做Q在内部，F0_c当做KV，最后输出处理后的Fw特征给features_t1的最上层
-                # self.memory_bank.append(feature_t1[-1])
-
-                # t1 → t2
-                feature_t2 = self.softsplat_net(tenEncone=feature_t1, tenForward=flow_t1_t2, event_voxel=ev_t1_t2, rgb=x[0])  # 还是一个金字塔，最上层的被改了
-
-                # feature_t2[-1] = self.fusion_attens(Fw=feature_t2[-1], F0_c=self.memory_bank[0], Kd=self.memory_bank[1]) # 第一次是Fw做Q，FC做KV，得到Fw，然后再Fw做Q，Kd做KV，得到Fw
-
-                y_t2 = self.decode_head(feature_t2)  # 解码金字塔，用的segformer的,返回每个像素的语义类别分割概率
-
-                y.append(F.interpolate(y_t2, size=x[0].shape[2:], mode='bilinear', align_corners=False)) # y
-                # exit(0)
+                y_t1 = self.decode_head(feature_t1)
+                y.append(F.interpolate(y_t1, size=x[0].shape[2:], mode='bilinear', align_corners=False))
                 return y
 
 

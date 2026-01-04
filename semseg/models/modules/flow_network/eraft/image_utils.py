@@ -129,7 +129,7 @@ class ImagePadder(object):
             return F.pad(image, pad, mode="constant", value=self.value)
         return F.pad(image, pad, mode=self.mode)
 
-    def unpad(self, image):
+    def unpad(self, image):     # 在onnx里面表现为slice节点。
         """Remove padding added by `pad()`."""
         if self._pad is None:
             return image

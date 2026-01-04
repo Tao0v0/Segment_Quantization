@@ -41,7 +41,7 @@ DATASET:
 
 TRAIN:
   IMAGE_SIZE    : [440, 640]    # training image size in (h, w)
-  BATCH_SIZE    : 1               # batch size used to train
+  BATCH_SIZE    : 4               # batch size used to train
   EPOCHS        : 400             # number of epochs to train
   EVAL_START    : 0             # evaluation interval start
   EVAL_INTERVAL : 1               # evaluation interval during training

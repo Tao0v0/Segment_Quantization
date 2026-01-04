@@ -56,9 +56,9 @@ class ERAFT(nn.Module):
             self.iters = 12
 
             # feature network, context network, and update block
-            self.fnet = BasicEncoder(dims=(64, 64, 96, 128, 256), norm_fn='instance', dropout=0,
+            self.fnet = BasicEncoder(dims=(64, 64, 96, 128, 256), norm_fn='layer', dropout=0,
                                         n_first_channels=n_first_channels)
-            self.cnet = BasicEncoder(dims=(64, 64, 96, 128, 256), norm_fn='batch', dropout=0,
+            self.cnet = BasicEncoder(dims=(64, 64, 96, 128, 256), norm_fn='layer', dropout=0,
                                         n_first_channels=n_first_channels)
             self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim, raft_type=self.raft_type)
         elif self.raft_type == 'small':
@@ -214,4 +214,4 @@ class ERAFT(nn.Module):
             flow_predictions.append(self.image_padder.unpad(flow_up))   #unpad：把多余的边界裁剪掉，恢复到原图大小
 
         return coords1 - coords0, flow_predictions      
-        # 返回低分辨1/8分辨率光流（N,2,H/8,W/8） 和 高分辨率光流列表 [(N,2,H,W), ...]12个元素，最后一项是全分辨率输出
+        # 返回低分辨1/8分辨率光流（N,2,H/8,W/8） 和 高分辨率光流列表 [(N,2,H,W), ...]12个元素，最后一项是全分辨率输出，在顶层只取flow_predictions[-1]
