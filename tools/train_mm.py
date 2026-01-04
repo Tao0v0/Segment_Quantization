@@ -131,10 +131,23 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
             else:
                 flownet_checkpoint = torch.load(resume_flownet_path, map_location=torch.device('cpu'))  # for self trained flownet
                 # flownet_checkpoint = torch.load(resume_flownet_path, map_location=torch.device('cpu'), weights_only=True)
+                # Unwrap common checkpoint wrappers (some scripts save {"model_state_dict": ...} etc.).
+                if isinstance(flownet_checkpoint, dict):
+                    if 'model_state_dict' in flownet_checkpoint and isinstance(flownet_checkpoint['model_state_dict'], dict):
+                        flownet_checkpoint = flownet_checkpoint['model_state_dict']
+                    elif 'state_dict' in flownet_checkpoint and isinstance(flownet_checkpoint['state_dict'], dict):
+                        flownet_checkpoint = flownet_checkpoint['state_dict']
+                    elif 'model' in flownet_checkpoint and isinstance(flownet_checkpoint['model'], dict):
+                        flownet_checkpoint = flownet_checkpoint['model']
+
+                # Strip DDP prefix if present.
+                if isinstance(flownet_checkpoint, dict) and any(k.startswith('module.') for k in flownet_checkpoint.keys()):
+                    flownet_checkpoint = {k.replace('module.', '', 1): v for k, v in flownet_checkpoint.items()}
                 # 筛选出以 'flownet' 为前缀的键
-                flownet_checkpoint = {
-                    key: value for key, value in flownet_checkpoint.items() if key.startswith('flow_net')
-                }
+                if isinstance(flownet_checkpoint, dict) and any(k.startswith('flow_net') for k in flownet_checkpoint.keys()):
+                    flownet_checkpoint = {
+                        key: value for key, value in flownet_checkpoint.items() if key.startswith('flow_net')
+                    }
                 # 给所有key去掉前缀 'flow_net.'
                 flownet_checkpoint = {k.replace('flow_net.', ''): v for k, v in flownet_checkpoint.items()}
 
@@ -174,6 +187,21 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
 
             _adapt_or_drop_first_conv("fnet")
             _adapt_or_drop_first_conv("cnet")
+
+            if not isinstance(flownet_checkpoint, dict):
+                raise TypeError(
+                    f"Unexpected flownet_checkpoint type: {type(flownet_checkpoint)} (expected dict-like state_dict)."
+                )
+            model_sd = model.flow_net.state_dict()
+            overlap = set(flownet_checkpoint.keys()) & set(model_sd.keys())
+            if len(overlap) == 0:
+                example_keys = list(flownet_checkpoint.keys())[:10]
+                raise ValueError(
+                    "RESUME_FLOWNET does not match ERAFT state_dict format (0 overlapping keys). "
+                    f"Path={resume_flownet_path!r}, first_keys={example_keys}"
+                )
+            if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
+                print(f"[flow] checkpoint keys={len(flownet_checkpoint)} overlap={len(overlap)}")
         elif flow_net_type == 'raft_small':
             flownet_checkpoint = torch.load(resume_flownet_path, map_location=torch.device('cpu'))
         elif flow_net_type == 'bflow':
