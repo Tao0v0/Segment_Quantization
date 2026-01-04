@@ -47,7 +47,8 @@ TRAIN:
   EVAL_INTERVAL : 1               # evaluation interval during training
   AMP           : false           # use AMP in training
   DDP           : true            # use DDP training
-
+  FREEZE_FLOW_NET : true
+  FREEZE_SOFTMETRIC: true
 LOSS:
   NAME          : OhemCrossEntropy          # loss function name 
   CLS_WEIGHTS   : false            # use class weights in loss calculation

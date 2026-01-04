@@ -126,14 +126,43 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
                 }
                 # 给所有key去掉前缀 'flow_net.'
                 flownet_checkpoint = {k.replace('flow_net.', ''): v for k, v in flownet_checkpoint.items()}
-            if 'fnet.conv1.weight' in flownet_checkpoint:
-                # delete weights of the first layer
-                flownet_checkpoint.pop('fnet.conv1.weight')
-                flownet_checkpoint.pop('fnet.conv1.bias')
-            if 'cnet.conv1.weight' in flownet_checkpoint:
-                # delete weights of the second layer
-                flownet_checkpoint.pop('cnet.conv1.weight')
-                flownet_checkpoint.pop('cnet.conv1.bias')
+
+            def _adapt_or_drop_first_conv(conv_prefix: str) -> None:
+                w_key = f"{conv_prefix}.conv1.weight"
+                b_key = f"{conv_prefix}.conv1.bias"
+                if w_key not in flownet_checkpoint:
+                    return
+
+                model_sd = model.flow_net.state_dict()
+                if w_key not in model_sd:
+                    return
+
+                w_src = flownet_checkpoint[w_key]
+                w_tgt = model_sd[w_key]
+                if not (isinstance(w_src, torch.Tensor) and isinstance(w_tgt, torch.Tensor)):
+                    return
+                if w_src.shape == w_tgt.shape:
+                    return
+
+                # Adapt only the input-channel dimension by averaging/repeating groups when possible.
+                if w_src.ndim == 4 and w_tgt.ndim == 4 and w_src.shape[0] == w_tgt.shape[0] and w_src.shape[2:] == w_tgt.shape[2:]:
+                    in_src = int(w_src.shape[1])
+                    in_tgt = int(w_tgt.shape[1])
+                    if in_src % in_tgt == 0:
+                        group = in_src // in_tgt
+                        flownet_checkpoint[w_key] = w_src.view(w_src.shape[0], in_tgt, group, w_src.shape[2], w_src.shape[3]).mean(dim=2)
+                        return
+                    if in_tgt % in_src == 0:
+                        rep = in_tgt // in_src
+                        flownet_checkpoint[w_key] = w_src.repeat(1, rep, 1, 1) / float(rep)
+                        return
+
+                # Fallback: drop mismatched conv weights (and bias) so remaining weights can still load.
+                flownet_checkpoint.pop(w_key, None)
+                flownet_checkpoint.pop(b_key, None)
+
+            _adapt_or_drop_first_conv("fnet")
+            _adapt_or_drop_first_conv("cnet")
         elif flow_net_type == 'raft_small':
             flownet_checkpoint = torch.load(resume_flownet_path, map_location=torch.device('cpu'))
         elif flow_net_type == 'bflow':
@@ -210,6 +239,20 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
         for name, param in model.named_parameters():
             print(f"{name}: requires_grad={param.requires_grad}")
         # # end
+    freeze_flow = bool(train_cfg.get("FREEZE_FLOW_NET", False))
+    freeze_softmetric = bool(train_cfg.get("FREEZE_SOFTMETRIC", False))
+    freeze_softsplat = bool(train_cfg.get("FREEZE_SOFTSPLAT", False))
+    if freeze_flow or freeze_softmetric or freeze_softsplat:
+        if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
+            print(f"Freezing modules: flow_net={freeze_flow} softmetric={freeze_softmetric} softsplat={freeze_softsplat}")
+        for name, param in model.named_parameters():
+            if freeze_flow and "flow_net" in name:
+                param.requires_grad = False
+            if freeze_softmetric and "softsplat_net.netSoftmetric" in name:
+                param.requires_grad = False
+            if freeze_softsplat and "softsplat_net" in name:
+                param.requires_grad = False
+
     trainloader = DataLoader(trainset, batch_size=train_cfg['BATCH_SIZE'], num_workers=num_workers, drop_last=True, pin_memory=True, sampler=sampler, worker_init_fn=lambda worker_id: np.random.seed(3407 + worker_id))
     # trainloader = DataLoader(trainset, batch_size=train_cfg['BATCH_SIZE'], num_workers=0, drop_last=True, pin_memory=True, sampler=sampler, worker_init_fn=lambda worker_id: np.random.seed(3407 + worker_id))
     valloader = DataLoader(valset, batch_size=eval_cfg['BATCH_SIZE'], num_workers=num_workers, pin_memory=True, sampler=sampler_val, worker_init_fn=lambda worker_id: np.random.seed(3407 + worker_id))
@@ -361,8 +404,45 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
             #     if param.grad is not None:
             #         grad_norm = torch.norm(param.grad, p=2)
             #         print(grad_norm)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1, norm_type=2)
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10, norm_type=2)
+            raw_model = model.module if hasattr(model, "module") else model
+
+            if amp_enabled and scaler.is_enabled():
+                scaler.unscale_(optimizer)
+
+            # Detect non-finite gradients before clipping; otherwise clip_grad_norm_ can spread NaNs to all params.
+            bad_grads = []
+            total_bad = 0
+            for pname, p in raw_model.named_parameters():
+                if p.grad is None:
+                    continue
+                if not torch.isfinite(p.grad).all().item():
+                    total_bad += 1
+                    if len(bad_grads) < 20:
+                        bad_grads.append(pname)
+            if total_bad:
+                rank = 0
+                try:
+                    if dist.is_initialized():
+                        rank = int(dist.get_rank())
+                except Exception:
+                    rank = 0
+
+                lines = []
+                lines.append(f"[error] Non-finite gradients detected at epoch={epoch+1} iter={iter+1} rank={rank}")
+                lines.append(f"nonfinite_grads_total={total_bad} examples={bad_grads}")
+                for ln in lines:
+                    print(ln, flush=True)
+                try:
+                    nan_log = Path(save_dir) / f"nan_debug_rank{rank}.txt"
+                    with open(nan_log, "a", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + "\n")
+                except Exception:
+                    pass
+                raise FloatingPointError("Non-finite gradients (NaN/Inf). See debug prints / nan_debug_rank*.txt")
+
+            grad_clip = float(train_cfg.get("GRAD_CLIP", 1.0))
+            if grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=grad_clip, norm_type=2.0)
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
