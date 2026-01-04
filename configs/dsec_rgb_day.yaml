@@ -55,7 +55,7 @@ LOSS:
 
 OPTIMIZER:
   NAME          : adamw           # optimizer name
-  LR            : 0.00001         # initial learning rate used in optimizer
+  LR            : 0.00005         # initial learning rate used in optimizer
   WEIGHT_DECAY  : 0.005            # decay rate used in optimizer
 
 SCHEDULER:
