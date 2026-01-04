@@ -272,35 +272,76 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
                 # loss = loss_fn(logits, lbl) + 0.5*feature_loss + 0.5*consistent_loss
 
             if not torch.isfinite(loss).item():
-                print(f"[error] Non-finite loss detected at epoch={epoch+1} iter={iter+1}")
+                rank = 0
                 try:
-                    print("seq_names:", seq_names)
-                    print("seq_index:", seq_index)
+                    if dist.is_initialized():
+                        rank = int(dist.get_rank())
+                except Exception:
+                    rank = 0
+
+                lines = []
+                lines.append(f"[error] Non-finite loss detected at epoch={epoch+1} iter={iter+1} rank={rank}")
+                try:
+                    lines.append(f"seq_names: {seq_names}")
+                    lines.append(f"seq_index: {seq_index}")
                 except Exception:
                     pass
                 try:
                     lbl = lbls[0]
                     ignore = int(dataset_cfg.get('IGNORE_LABEL', 255))
-                    valid = (lbl != ignore).sum().item()
+                    valid = int((lbl != ignore).sum().item())
                     uniq = torch.unique(lbl).detach().cpu().tolist()
-                    print(f"label valid_pixels={valid} unique={uniq[:64]}{'...' if len(uniq) > 64 else ''}")
+                    lines.append(f"label valid_pixels={valid} unique={uniq[:64]}{'...' if len(uniq) > 64 else ''}")
                 except Exception as e:
-                    print("label debug failed:", repr(e))
+                    lines.append("label debug failed: " + repr(e))
                 try:
                     out = logits[-1]
-                    finite = torch.isfinite(out).all().item()
-                    out_min = out.detach().float().min().item()
-                    out_max = out.detach().float().max().item()
-                    print(f"logits[-1] finite={finite} min={out_min:.6g} max={out_max:.6g} shape={tuple(out.shape)} dtype={out.dtype}")
+                    finite = bool(torch.isfinite(out).all().item())
+                    out_min = float(out.detach().float().min().item())
+                    out_max = float(out.detach().float().max().item())
+                    lines.append(f"logits[-1] finite={finite} min={out_min:.6g} max={out_max:.6g} shape={tuple(out.shape)} dtype={out.dtype}")
                 except Exception as e:
-                    print("logits debug failed:", repr(e))
+                    lines.append("logits debug failed: " + repr(e))
                 for si, sx in enumerate(sample):
                     if torch.is_tensor(sx) and sx.is_floating_point():
-                        finite = torch.isfinite(sx).all().item()
-                        smin = sx.detach().float().min().item()
-                        smax = sx.detach().float().max().item()
-                        print(f"sample[{si}] finite={finite} min={smin:.6g} max={smax:.6g} shape={tuple(sx.shape)} dtype={sx.dtype}")
-                raise FloatingPointError("Non-finite loss (NaN/Inf). See debug prints above.")
+                        try:
+                            finite = bool(torch.isfinite(sx).all().item())
+                            smin = float(sx.detach().float().min().item())
+                            smax = float(sx.detach().float().max().item())
+                            lines.append(f"sample[{si}] finite={finite} min={smin:.6g} max={smax:.6g} shape={tuple(sx.shape)} dtype={sx.dtype}")
+                        except Exception as e:
+                            lines.append(f"sample[{si}] debug failed: {repr(e)}")
+
+                # Check whether model parameters already contain NaN/Inf (often indicates divergence after an optimizer step).
+                try:
+                    raw_model = model.module if hasattr(model, "module") else model
+                    bad_params = []
+                    total_bad = 0
+                    for name, p in raw_model.named_parameters():
+                        if not torch.is_tensor(p):
+                            continue
+                        if not torch.isfinite(p).all().item():
+                            total_bad += 1
+                            if len(bad_params) < 20:
+                                bad_params.append(name)
+                    if total_bad:
+                        lines.append(f"nonfinite_params_total={total_bad} examples={bad_params}")
+                    else:
+                        lines.append("nonfinite_params_total=0")
+                except Exception as e:
+                    lines.append("param debug failed: " + repr(e))
+
+                # Print and also persist to a file for DDP runs where stdout can be truncated.
+                for ln in lines:
+                    print(ln, flush=True)
+                try:
+                    nan_log = Path(save_dir) / f"nan_debug_rank{rank}.txt"
+                    with open(nan_log, "a", encoding="utf-8") as f:
+                        f.write("\n".join(lines) + "\n")
+                except Exception:
+                    pass
+
+                raise FloatingPointError("Non-finite loss (NaN/Inf). See debug prints / nan_debug_rank*.txt")
 
             scaler.scale(loss).backward()
             # scaler.scale(loss).backward(retain_graph=True)

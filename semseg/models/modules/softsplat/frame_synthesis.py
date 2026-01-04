@@ -673,7 +673,16 @@ class Synthesis(torch.nn.Module):
     def forward(self, tenEncone, tenForward, event_voxel, rgb=None):        # 输入特征金字塔，光流，以及事件
         # 如果tenForward和event_vexel 和tenEncone[0]的shape 不一样 需要进行插值
         if tenForward.shape[2:] != tenEncone[0].shape[2:]:
-            tenForward = torch.nn.functional.interpolate(input=tenForward, size=(tenEncone[0].shape[2], tenEncone[0].shape[3]), mode='bilinear', align_corners=False) * (float(tenEncone[0].shape[3]) / float(tenForward.shape[3]))
+            tenForward = torch.nn.functional.interpolate(
+                input=tenForward,
+                size=(tenEncone[0].shape[2], tenEncone[0].shape[3]),
+                mode='bilinear',
+                align_corners=False,
+            ) * (float(tenEncone[0].shape[3]) / float(tenForward.shape[3]))
+
+        # Numerical safety: ensure flow is finite and bounded before warping kernels.
+        tenForward = torch.nan_to_num(tenForward, nan=0.0, posinf=0.0, neginf=0.0)
+        tenForward = tenForward.clamp(-512.0, 512.0)
         if event_voxel.shape[2:] != tenEncone[0].shape[2:]:
             event_voxel = torch.nn.functional.interpolate(input=event_voxel, size=(tenEncone[0].shape[2], tenEncone[0].shape[3]), mode='bilinear', align_corners=False)
         if rgb is not None and rgb.shape[2:] != tenEncone[0].shape[2:]:
@@ -684,6 +693,10 @@ class Synthesis(torch.nn.Module):
             tenMetricone = torch.zeros(B, 1, H, W).to(event_voxel.device)
         else:
             tenMetricone = self.netSoftmetric(event_voxel, tenForward, rgb) * 2.0
+
+        # Numerical safety: metric is used as both a feature channel and an exponent weight in softsplat.
+        tenMetricone = torch.nan_to_num(tenMetricone, nan=0.0, posinf=0.0, neginf=0.0)
+        tenMetricone = tenMetricone.clamp(-20.0, 20.0)
         # print(tenMetricone.mean())
         tenWarp = self.netWarp(tenEncone, tenMetricone, tenForward)
         return tenWarp
