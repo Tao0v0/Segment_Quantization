@@ -103,11 +103,22 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
         elif candidate_pretrained:
             raise FileNotFoundError(f"No pretrained checkpoint found. Tried: {candidate_pretrained}")
     
-    if model_cfg['FLOW_NET_FLAG'] and os.path.isfile(model_cfg['RESUME_FLOWNET']):
-        if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
-            print('Loading flownet model...')
+    resume_flownet_path = model_cfg.get('RESUME_FLOWNET', '')
+    if model_cfg.get('FLOW_NET_FLAG', False):
+        if isinstance(resume_flownet_path, str) and resume_flownet_path:
+            if not os.path.isfile(resume_flownet_path):
+                raise FileNotFoundError(f"FLOW_NET_FLAG=True but RESUME_FLOWNET not found: {resume_flownet_path!r}")
+
+            if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
+                print(f"Loading flownet model from: {resume_flownet_path}")
+
+        else:
+            if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
+                print("[info] FLOW_NET_FLAG=True but RESUME_FLOWNET is empty; using flow_net weights from MODEL.RESUME (if any) or random init.")
+            resume_flownet_path = None
+
+    if model_cfg.get('FLOW_NET_FLAG', False) and resume_flownet_path:
         flow_net_type = model_cfg['FLOW_NET']
-        resume_flownet_path = model_cfg['RESUME_FLOWNET']
 
         if flow_net_type == 'eraft':
             ## for eraft

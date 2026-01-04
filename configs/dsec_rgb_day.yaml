@@ -13,7 +13,7 @@ MODEL:
   # PRETRAINED      : 'paper_results/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch20_65.4.pth'
   FLOW_NET_FLAG : True
   FLOW_NET      : 'eraft'
-  RESUME_FLOWNET: ''
+  RESUME_FLOWNET: 'output_all_LNorm_HW_flow_finetune_upsampleflow/DSEC_Flow_CMNeXt-B2_i/model_thun_00_a_11_CMNeXt_CMNeXt-B2_DSEC_Flow_epoch3_0.6645078579100167.pth'
   RESUME        : 'output_viz_dsec/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch5_44.14.pth'                                                # checkpoint file 
   # RESUME_FLOWNET: ''
 
@@ -55,13 +55,13 @@ LOSS:
 
 OPTIMIZER:
   NAME          : adamw           # optimizer name
-  LR            : 0.00005         # initial learning rate used in optimizer
+  LR            : 0.0001         # initial learning rate used in optimizer
   WEIGHT_DECAY  : 0.005            # decay rate used in optimizer
 
 SCHEDULER:
   NAME          : warmuppolylr    # scheduler name
   POWER         : 0.95             # scheduler power
-  WARMUP        : 1              # warmup epochs used in scheduler 
+  WARMUP        : 10              # warmup epochs used in scheduler 
   WARMUP_RATIO  : 0.1             # warmup ratio
   
 

@@ -95,6 +95,23 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
         from semseg.models.modules.flow_network.eraft.eraft import ERAFT
 
         model = ERAFT(n_first_channels=4)
+    elif flow_net_type == 'eraft_original':
+        # `E-RAFT_original` contains the upstream ERAFT implementation and is not a valid Python
+        # package name due to the '-' character. Add it to sys.path and import its `model` package.
+        import sys
+
+        eraft_root = (
+            Path(__file__).resolve().parents[1]
+            / "semseg"
+            / "models"
+            / "modules"
+            / "flow_network"
+            / "E-RAFT_original"
+        )
+        sys.path.insert(0, str(eraft_root))
+        from model.eraft import ERAFT as ERAFT_ORIG
+
+        model = ERAFT_ORIG(config={"subtype": "standard"}, n_first_channels=4)
     else:
         model = eval(model_cfg['NAME'])(
             model_cfg['BACKBONE'],
@@ -113,12 +130,12 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
     if model_cfg['FLOW_NET_FLAG'] and os.path.isfile(model_cfg['RESUME_FLOWNET']):
         if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
             print('Loading flownet model...')
-        flow_net_type = model_cfg['FLOW_NET']
+        flow_net_type = str(model_cfg['FLOW_NET']).lower()
         resume_flownet_path = model_cfg['RESUME_FLOWNET']
         print("flow_net_type: ", flow_net_type)
         print("dataset_cfg['TYPE']: ", dataset_cfg['TYPE'])
 
-        if flow_net_type == 'eraft' or flow_net_type == 'raft_small':
+        if flow_net_type in ('eraft', 'raft_small', 'eraft_original'):
             ## for eraft
             # if dataset_cfg['TYPE'] == 'dsec':
             if dataset_cfg['TYPE'] == 'dsec_':
