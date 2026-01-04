@@ -279,19 +279,30 @@ class OhemCrossEntropy(nn.Module):
         super().__init__()
         self.ignore_label = ignore_label
         self.aux_weights = aux_weights
-        self.thresh = -torch.log(torch.tensor(thresh, dtype=torch.float))
+        # Store as python float to avoid device-mismatch issues (CPU vs CUDA tensors).
+        # thresh is a probability; convert to loss threshold via -log(thresh).
+        self.thresh = float(-math.log(float(thresh)))
         self.criterion = nn.CrossEntropyLoss(weight=weight, ignore_index=ignore_label, reduction='none')
 
     def _forward(self, preds: Tensor, labels: Tensor) -> Tensor:
         # preds in shape [B, C, H, W] and labels in shape [B, H, W]
-        n_min = labels[labels != self.ignore_label].numel() // 16
-        loss = self.criterion(preds, labels).view(-1)
-        loss_hard = loss[loss > self.thresh]
+        valid = labels != self.ignore_label
+        n_valid = int(valid.sum().item())
+        if n_valid == 0:
+            # No supervised pixels in this crop; return a zero loss instead of NaN.
+            return preds.new_zeros(())
 
+        n_min = max(n_valid // 16, 1)
+        # Filter to supervised pixels only so ignored pixels (loss=0) don't affect OHEM selection.
+        loss = self.criterion(preds, labels).view(-1)
+        loss = loss[valid.view(-1)]
+
+        # Select hard pixels (loss > thresh); if too few, take top-k.
+        loss_hard = loss[loss > self.thresh]
         if loss_hard.numel() < n_min:
             loss_hard, _ = loss.topk(n_min)
 
-        return torch.mean(loss_hard)
+        return loss_hard.mean()
 
     def forward(self, preds, labels: Tensor) -> Tensor:
         if isinstance(preds, tuple):

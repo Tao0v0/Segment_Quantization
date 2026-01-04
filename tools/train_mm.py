@@ -271,6 +271,37 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
                 #     loss = loss + loss_fn(logits[0], lbls[1])
                 # loss = loss_fn(logits, lbl) + 0.5*feature_loss + 0.5*consistent_loss
 
+            if not torch.isfinite(loss).item():
+                print(f"[error] Non-finite loss detected at epoch={epoch+1} iter={iter+1}")
+                try:
+                    print("seq_names:", seq_names)
+                    print("seq_index:", seq_index)
+                except Exception:
+                    pass
+                try:
+                    lbl = lbls[0]
+                    ignore = int(dataset_cfg.get('IGNORE_LABEL', 255))
+                    valid = (lbl != ignore).sum().item()
+                    uniq = torch.unique(lbl).detach().cpu().tolist()
+                    print(f"label valid_pixels={valid} unique={uniq[:64]}{'...' if len(uniq) > 64 else ''}")
+                except Exception as e:
+                    print("label debug failed:", repr(e))
+                try:
+                    out = logits[-1]
+                    finite = torch.isfinite(out).all().item()
+                    out_min = out.detach().float().min().item()
+                    out_max = out.detach().float().max().item()
+                    print(f"logits[-1] finite={finite} min={out_min:.6g} max={out_max:.6g} shape={tuple(out.shape)} dtype={out.dtype}")
+                except Exception as e:
+                    print("logits debug failed:", repr(e))
+                for si, sx in enumerate(sample):
+                    if torch.is_tensor(sx) and sx.is_floating_point():
+                        finite = torch.isfinite(sx).all().item()
+                        smin = sx.detach().float().min().item()
+                        smax = sx.detach().float().max().item()
+                        print(f"sample[{si}] finite={finite} min={smin:.6g} max={smax:.6g} shape={tuple(sx.shape)} dtype={sx.dtype}")
+                raise FloatingPointError("Non-finite loss (NaN/Inf). See debug prints above.")
+
             scaler.scale(loss).backward()
             # scaler.scale(loss).backward(retain_graph=True)
             # # 可视化计算图
