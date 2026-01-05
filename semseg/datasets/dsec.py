@@ -18,6 +18,15 @@ import math
 
 from scipy.ndimage import gaussian_filter
 
+
+def _is_rank0() -> bool:
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return True
+    try:
+        return torch.distributed.get_rank() == 0
+    except Exception:
+        return True
+
 def backwarp(tenIn, tenFlow):
     tenHor = torch.linspace(start=-1.0, end=1.0, steps=tenFlow.shape[2], dtype=tenFlow.dtype).view(1, 1, -1).repeat(1, tenFlow.shape[1], 1)
     tenVer = torch.linspace(start=-1.0, end=1.0, steps=tenFlow.shape[1], dtype=tenFlow.dtype).view(1, -1, 1).repeat(1, 1, tenFlow.shape[2])
@@ -188,11 +197,13 @@ class DSEC(Dataset):
         self.duration = duration
         self.time_window = duration//50
         if dataset_type == 'sdsec':
-            print(f"Loading SDSEC dataset with {duration}ms duration.")
+            if _is_rank0():
+                print(f"Loading SDSEC dataset with {duration}ms duration.")
             self.index_window = self.duration//10
             self.bin = 20
         elif dataset_type == 'dsec':
-            print(f"Loading DSEC dataset with {duration}ms duration.")
+            if _is_rank0():
+                print(f"Loading DSEC dataset with {duration}ms duration.")
             self.index_window = self.duration//50
             self.bin = 20
     
@@ -211,8 +222,9 @@ class DSEC(Dataset):
         # dt = 1
         # self.seg_gt_dirname = f'/gtFine_t1'
         # self.seg_gt_dirname = f'/gtFine_t{self.time_window}_dt{dt}'
-        print("Root: ", self.root)
-        print(f"Loading {self.seg_gt_dirname} segmentation ground truth.")
+        if _is_rank0():
+            print("Root: ", self.root)
+            print(f"Loading {self.seg_gt_dirname} segmentation ground truth.")
         # self.files = sorted(glob.glob(os.path.join(*[root, 'leftImg8bit', split, '*', '*.png'])))
         # self.n_classes = 13
         if self.semantic_layout:
@@ -240,7 +252,8 @@ class DSEC(Dataset):
 
         # self.sample_dirname = 'processed'
         # self.files = sorted(glob.glob(os.path.join(*[root, self.sample_dirname, split, '*', '*.npy'])))
-        print(f"Found {len(self.files)} {split} images.")
+        if _is_rank0():
+            print(f"Found {len(self.files)} {split} images.")
 
 
     def __len__(self) -> int:

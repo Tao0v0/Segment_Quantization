@@ -57,6 +57,7 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
     epochs, lr = train_cfg['EPOCHS'], optim_cfg['LR']
     resume_path = cfg['MODEL']['RESUME']
     gpus = int(os.environ.get('WORLD_SIZE', '1'))
+    flow_load_summary = None
 
     if train_cfg.get('DDP', False) and not dist.is_initialized():
         print("[warn] TRAIN.DDP=True but torch.distributed is not initialized; falling back to single-process training. "
@@ -81,11 +82,29 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
 
     anytime_flag = bool(model_cfg.get('ANYTIME_FLAG', False))
     model = eval(model_cfg['NAME'])(model_cfg['BACKBONE'], trainset.n_classes, dataset_cfg['MODALS'], model_cfg['BACKBONE_FLAG'], model_cfg['FLOW_NET_FLAG'], dataset_type=dataset_cfg['TYPE'], anytime_flag=anytime_flag)
-    resume_checkpoint = None
+    resume_checkpoint = None  # raw checkpoint (may include optimizer/scheduler), or None
     if os.path.isfile(resume_path):
         resume_checkpoint = torch.load(resume_path, map_location=torch.device('cpu'))
-        msg = model.load_state_dict(resume_checkpoint, strict=False)
-        # print("resume_checkpoint msg: ", msg)
+        resume_state_dict = None
+        if isinstance(resume_checkpoint, dict):
+            # Full training checkpoint (preferred for true resume).
+            if 'model_state_dict' in resume_checkpoint and isinstance(resume_checkpoint['model_state_dict'], dict):
+                resume_state_dict = resume_checkpoint['model_state_dict']
+            elif 'model' in resume_checkpoint and isinstance(resume_checkpoint['model'], dict):
+                resume_state_dict = resume_checkpoint['model']
+            elif 'state_dict' in resume_checkpoint and isinstance(resume_checkpoint['state_dict'], dict):
+                resume_state_dict = resume_checkpoint['state_dict']
+            else:
+                # Might already be a plain state_dict (path ends with .pth).
+                resume_state_dict = resume_checkpoint
+        else:
+            resume_state_dict = resume_checkpoint
+
+        # Strip DDP prefix if present.
+        if isinstance(resume_state_dict, dict) and any(k.startswith('module.') for k in resume_state_dict.keys()):
+            resume_state_dict = {k.replace('module.', '', 1): v for k, v in resume_state_dict.items()}
+
+        msg = model.load_state_dict(resume_state_dict, strict=False)
         logger.info(msg)
     else:
         if model_cfg.get('BACKBONE_FLAG', False):
@@ -227,6 +246,21 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
         flownet_msg = model.flow_net.load_state_dict(flownet_checkpoint, strict=False)
         print("flownet_checkpoint msg: ", flownet_msg)
         logger.info(flownet_msg)
+        try:
+            model_sd = model.flow_net.state_dict()
+            ckpt_keys = set(flownet_checkpoint.keys()) if isinstance(flownet_checkpoint, dict) else set()
+            overlap = len(ckpt_keys & set(model_sd.keys()))
+        except Exception:
+            overlap = -1
+        flow_load_summary = (
+            f"[flow] RESUME_FLOWNET={resume_flownet_path} "
+            f"missing={len(getattr(flownet_msg, 'missing_keys', []))} "
+            f"unexpected={len(getattr(flownet_msg, 'unexpected_keys', []))} "
+            f"overlap={overlap}"
+        )
+        if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
+            print(flow_load_summary, flush=True)
+            logger.info(flow_load_summary)
         # exit(0)
 
     model = model.to(device)
@@ -262,6 +296,9 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
     if not model_cfg['BACKBONE_FLAG']:
         if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
             print('Freezing backbone...')
+        verbose_params = bool(train_cfg.get("PRINT_REQUIRES_GRAD", False)) and (
+            (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP'])
+        )
         # # 冻结除 flow_net 和 softsplat_net 之外的所有层
         for name, param in model.named_parameters():
             param.requires_grad = True
@@ -276,7 +313,8 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
         #         param.requires_grad = True
         # # 检查哪些参数被冻结了
         for name, param in model.named_parameters():
-            print(f"{name}: requires_grad={param.requires_grad}")
+            if verbose_params:
+                print(f"{name}: requires_grad={param.requires_grad}")
         # # end
     freeze_flow = bool(train_cfg.get("FREEZE_FLOW_NET", False))
     freeze_softmetric = bool(train_cfg.get("FREEZE_SOFTMETRIC", False))
@@ -309,6 +347,28 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
     iters_per_epoch = len(trainloader)
     scheduler = get_scheduler(sched_cfg['NAME'], optimizer, int((epochs+1)*iters_per_epoch), sched_cfg['POWER'], iters_per_epoch * sched_cfg['WARMUP'], sched_cfg['WARMUP_RATIO'])
 
+    # True resume (continue epoch/LR/optimizer state) only works when MODEL.RESUME points to "*_checkpoint.pth".
+    # If MODEL.RESUME is a plain state_dict (.pth), we treat it as initialization (fresh optimizer/scheduler).
+    if isinstance(resume_checkpoint, dict) and ('optimizer_state_dict' in resume_checkpoint or 'scheduler_state_dict' in resume_checkpoint):
+        ckpt_epoch = int(resume_checkpoint.get('epoch', 0) or 0)
+        if ckpt_epoch > 0:
+            start_epoch = ckpt_epoch
+        if 'best_miou' in resume_checkpoint:
+            try:
+                best_mIoU = float(resume_checkpoint['best_miou'])
+                best_epoch = ckpt_epoch if ckpt_epoch > 0 else best_epoch
+            except Exception:
+                pass
+
+        try:
+            optimizer.load_state_dict(resume_checkpoint['optimizer_state_dict'])
+        except Exception as e:
+            logger.warning(f"[resume] Failed to load optimizer_state_dict: {e}")
+        try:
+            scheduler.load_state_dict(resume_checkpoint['scheduler_state_dict'])
+        except Exception as e:
+            logger.warning(f"[resume] Failed to load scheduler_state_dict: {e}")
+
     scaler = GradScaler(enabled=train_cfg['AMP'])
     if (train_cfg['DDP'] and torch.distributed.get_rank() == 0) or (not train_cfg['DDP']):
         writer = SummaryWriter(str(save_dir))
@@ -319,6 +379,9 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
         logger.info(model)
         logger.info('================== training config =====================')
         logger.info(cfg)
+        if flow_load_summary:
+            logger.info(flow_load_summary)
+            print(flow_load_summary, flush=True)
 
         # exit(0)
 
