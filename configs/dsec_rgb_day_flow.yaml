@@ -10,8 +10,8 @@ MODEL:
   # PRETRAINED      : 'output/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch258_63.93.pth'
   PRETRAINED    : 'output/DSEC_CMNeXt-B2_i/model_day_11_CMNeXt_CMNeXt-B2_DSEC_epoch220_73.99.pth'
   FLOW_NET_FLAG : True
-  FLOW_NET      : 'eraft'
-  RESUME_FLOWNET: 'output_all_LNorm_HW_flow/DSEC_Flow_CMNeXt-B2_i/model_thun_00_a_11_CMNeXt_CMNeXt-B2_DSEC_Flow_epoch35_0.6729710741740901.pth'  # 训练不加载权重
+  FLOW_NET      : 'eraft_original'    # 原版
+  RESUME_FLOWNET: ''  # 训练不加载权重
 
 
   # FLOW_NET      : 'raft_small'

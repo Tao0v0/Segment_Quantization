@@ -1,5 +1,6 @@
 import argparse
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -22,8 +23,36 @@ except Exception:  # pragma: no cover
 
 from semseg.datasets import DSEC_Flow
 from semseg.metrics import compute_epe, compute_npe
-from semseg.models.modules.flow_network.eraft.eraft import ERAFT
 
+
+def _build_flow_net(flow_net_type: str, n_first_channels: int):
+    flow_net_type = str(flow_net_type).lower()
+    if flow_net_type in ("eraft",):
+        from semseg.models.modules.flow_network.eraft.eraft import ERAFT
+
+        return ERAFT(n_first_channels=n_first_channels)
+
+    if flow_net_type in ("eraft_original", "original"):
+        repo_root = Path(__file__).resolve().parents[1]
+        flow_root = repo_root / "semseg" / "models" / "modules" / "flow_network"
+        candidates = (
+            flow_root / "ERAFT_original",
+            flow_root / "E-RAFT_original",
+            flow_root / "R-RAFT_original",
+        )
+        eraft_root = next((p for p in candidates if (p / "model" / "eraft.py").is_file()), None)
+        if eraft_root is None:
+            raise FileNotFoundError(
+                "Could not locate upstream ERAFT code. Expected one of:\n"
+                + "\n".join(f"  - {c}" for c in candidates)
+            )
+        if str(eraft_root) not in sys.path:
+            sys.path.insert(0, str(eraft_root))
+        from model.eraft import ERAFT as ERAFT_ORIG
+
+        return ERAFT_ORIG(config={"subtype": "standard"}, n_first_channels=n_first_channels)
+
+    raise ValueError(f"Unsupported flow net type: {flow_net_type!r}")
 
 def _load_state_dict(path: str, keys=("model_state_dict", "state_dict", "model")):
     ckpt = torch.load(path, map_location="cpu")
@@ -230,17 +259,25 @@ def main() -> None:
         root = args.root
     root_path = Path(root)
 
-    model = ERAFT(n_first_channels=4)
+    if args.bins % args.reduce_group != 0:
+        raise ValueError(f"--bins ({args.bins}) must be divisible by --reduce-group ({args.reduce_group})")
+    n_first_channels = args.bins // args.reduce_group
+    flow_net_type = str(cfg.get("MODEL", {}).get("FLOW_NET", "eraft")).lower()
+    model = _build_flow_net(flow_net_type, n_first_channels=n_first_channels)
     state_dict = _load_state_dict(args.weights)
-    # Backward-compat: older checkpoints (before `unfold_conv`) won't contain this fixed parameter.
-    # We inject the expected constant weight so `strict=True` can still be used.
-    if "unfold_conv.weight" not in state_dict and hasattr(model, "unfold_conv"):
-        state_dict = dict(state_dict)
-        state_dict["unfold_conv.weight"] = model.unfold_conv.weight.detach().clone()
-    # Backward-compat: remove legacy experimental key if present.
-    if "flow_unfold3x3.weight" in state_dict:
-        state_dict = dict(state_dict)
-        state_dict.pop("flow_unfold3x3.weight", None)
+    if isinstance(state_dict, dict) and any(k.startswith("module.") for k in state_dict.keys()):
+        state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+
+    if flow_net_type == "eraft":
+        # Backward-compat: older checkpoints (before `unfold_conv`) won't contain this fixed parameter.
+        # We inject the expected constant weight so `strict=True` can still be used.
+        if "unfold_conv.weight" not in state_dict and hasattr(model, "unfold_conv"):
+            state_dict = dict(state_dict)
+            state_dict["unfold_conv.weight"] = model.unfold_conv.weight.detach().clone()
+        # Backward-compat: remove legacy experimental key if present.
+        if "flow_unfold3x3.weight" in state_dict:
+            state_dict = dict(state_dict)
+            state_dict.pop("flow_unfold3x3.weight", None)
     model.load_state_dict(state_dict, strict=True)
     model = model.to(device).eval()
 
@@ -463,4 +500,3 @@ PYTHONPATH=. python tools/eval_vis_flow.py \
 t   --all   --spatial-scale 0.5   --export-spatial-scale 1.0   --save-flow-png16   --flow-png-layout dsec   --out-dir submission_output
 
 """
-

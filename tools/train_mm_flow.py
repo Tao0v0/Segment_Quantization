@@ -96,18 +96,23 @@ def main(cfg, scene, classes, gpu, save_dir, duration):
 
         model = ERAFT(n_first_channels=4)
     elif flow_net_type == 'eraft_original':
-        # `E-RAFT_original` contains the upstream ERAFT implementation and is not a valid Python
-        # package name due to the '-' character. Add it to sys.path and import its `model` package.
+        # Upstream ERAFT expects `model.*` absolute imports. Add the upstream root to `sys.path`
+        # so `from model.eraft import ERAFT` works regardless of how the folder is named.
         import sys
 
-        eraft_root = (
-            Path(__file__).resolve().parents[1]
-            / "semseg"
-            / "models"
-            / "modules"
-            / "flow_network"
-            / "E-RAFT_original"
+        repo_root = Path(__file__).resolve().parents[1]
+        flow_root = repo_root / "semseg" / "models" / "modules" / "flow_network"
+        candidates = (
+            flow_root / "ERAFT_original",
+            flow_root / "E-RAFT_original",
+            flow_root / "R-RAFT_original",
         )
+        eraft_root = next((p for p in candidates if (p / "model" / "eraft.py").is_file()), None)
+        if eraft_root is None:
+            raise FileNotFoundError(
+                "Could not locate upstream ERAFT code. Expected one of:\n"
+                + "\n".join(f"  - {c}" for c in candidates)
+            )
         sys.path.insert(0, str(eraft_root))
         from model.eraft import ERAFT as ERAFT_ORIG
 
